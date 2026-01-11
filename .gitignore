@@ -208,3 +208,4 @@ __marimo__/
 
 # Research MCP generated data
 packages/research_mcp/papers/
+packages/research_mcp/mcp_project/.venv/
