@@ -8,7 +8,10 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
+
 load_dotenv()
+
+MODEL = "claude-sonnet-4-5-20250929"
 
 class MCP_ChatBot:
 
@@ -19,50 +22,60 @@ class MCP_ChatBot:
         self.available_tools: List[dict] = []
 
     async def process_query(self, query):
-        messages = [{'role':'user', 'content':query}]
-        response = self.anthropic.messages.create(max_tokens = 2024,
-                                      model = 'claude-3-7-sonnet-20250219', 
-                                      tools = self.available_tools, # tools exposed to the LLM
-                                      messages = messages)
-        process_query = True
-        while process_query:
-            assistant_content = []
-            for content in response.content:
-                if content.type =='text':
-                    print(content.text)
-                    assistant_content.append(content)
-                    if(len(response.content) == 1):
-                        process_query= False
-                elif content.type == 'tool_use':
-                    assistant_content.append(content)
-                    messages.append({'role':'assistant', 'content':assistant_content})
-                    tool_id = content.id
-                    tool_args = content.input
-                    tool_name = content.name
+        messages = [{"role": "user", "content": query}]
 
-                    print(f"Calling tool {tool_name} with args {tool_args}")
+        while True:
+            # Ask the model what to do next.
+            response = self.anthropic.messages.create(
+                max_tokens=2024,
+                model=MODEL,
+                tools=self.available_tools,
+                messages=messages,
+            )
 
-                    # Call a tool
-                    #result = execute_tool(tool_name, tool_args): not anymore needed
-                    # tool invocation through the client session
-                    result = await self.session.call_tool(tool_name, arguments=tool_args)
-                    messages.append({"role": "user", 
-                                      "content": [
-                                          {
-                                              "type": "tool_result",
-                                              "tool_use_id":tool_id,
-                                              "content": result.content
-                                          }
-                                      ]
-                                    })
-                    response = self.anthropic.messages.create(max_tokens = 2024,
-                                      model = 'claude-3-7-sonnet-20250219', 
-                                      tools = self.available_tools,
-                                      messages = messages) 
+            # Collect plain text and any tool calls in this assistant turn.
+            assistant_blocks = []
+            tool_calls = []
 
-                    if(len(response.content) == 1 and response.content[0].type == "text"):
-                        print(response.content[0].text)
-                        process_query= False
+            for block in response.content:
+                if block.type == "text":
+                    print(block.text)
+                    assistant_blocks.append(block)
+                elif block.type == "tool_use":
+                    assistant_blocks.append(block)
+                    tool_calls.append(block)
+
+            # Record the assistant turn exactly once.
+            if assistant_blocks:
+                messages.append({"role": "assistant", "content": assistant_blocks})
+
+            # If no tools were requested, we're done for this query.
+            if not tool_calls:
+                break
+
+            # Execute ALL requested tools and send back ALL tool_result blocks
+            # in the very next message, which is required by the Anthropic API.
+            tool_result_blocks = []
+            for call in tool_calls:
+                tool_name = call.name
+                tool_args = call.input
+                tool_id = call.id
+
+                print(f"Calling tool {tool_name} with args {tool_args}")
+                result = await self.session.call_tool(tool_name, arguments=tool_args)
+
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result.content,
+                    }
+                )
+
+            messages.append({"role": "user", "content": tool_result_blocks})
+
+        # spacing after each query
+        return
 
 
 
